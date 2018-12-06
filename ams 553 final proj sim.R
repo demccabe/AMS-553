@@ -11,7 +11,7 @@ max_runs = 100             #Max number of times for inner loop to run (for every
 loop_runs = 0
 
 #Loop that runs for all possible integer values of little s
-for (little_s in min_little_s:max_little_s) {
+#for (little_s in min_little_s:max_little_s) {
   
   avg_cost <- c()
   
@@ -33,9 +33,10 @@ for (little_s in min_little_s:max_little_s) {
     calc_penalty_cost <- function(y) {
       return (p*abs(y))
     }
-     
+    
     
     #Initializaitons
+    little_s=90
     big_S = 100           #Max inventory level
     Cur_inv_level = big_S #Current inventory level
     max_time = 200        #Max time simulation can run
@@ -52,23 +53,27 @@ for (little_s in min_little_s:max_little_s) {
     Penalty_cost <- c()   #Keep track of penalty costs
     Inv_level <- c()      #Keep track of inventory level across times
     K = 10                 #Fixed cost per order
-    c = .1                #Cost per unit per order
+    c = 10                #Cost per unit per order
     h = .3                #Cost per unit for holding it in inventory
-    p = .2                #Cost per unit in backlog
+    p = 20                #Cost per unit in backlog
     num_cust = 0          #Keeps track of number of customers
     cust_incoming = 0     #Decide if need to generate another customer arrival time
     arrival_times <- c()  #Keep track of arrival times
     backlog_level <- c()  #Keep track of backlog levels (0 if none)
-    
+    alpha = .1
+    mu = 100
+
     #Another loop if necessary
     #For number of separate simulations you want to run
     
     #Loop
+    inner_loop_runs = 0
     for (t in 0:max_time) {
+      
       #Calculate when next customer arrives (exponential - using inverse transform)
       #Ceiling function just to make it a whole number for simplicity's sake
       if(cust_incoming == 0) {
-        next_arrival = t + ceiling(-(1/lambda_exp)*log(runif(1,0,1)))
+        next_arrival = t +1
         cust_incoming = 1
         arrival_times[num_cust+1] = next_arrival #Individual arrival times (generated from exponential)
       }
@@ -96,11 +101,35 @@ for (little_s in min_little_s:max_little_s) {
       
       #Restock inventory level if below threshold AND no order already placed
       if (Cur_inv_level < little_s && order_status==0) {
-        order_num = order_num + 1
-        order_status = 1
-        order_time = t+order_wait
-        restock = min(big_S - Cur_inv_level,100)
-        order_cost[order_num] = calc_order_cost(restock)
+        #############new###########
+        cnew<-c()
+        foo_cust<-c()
+        foo_ord<-c()
+        foo_inv <- c()
+        foo_backlog <- c(rep(0,100))
+        foo_backlog_mean = 0
+        for (i in 1:100) {
+          cnew[i] = alpha*(mu - c) + rnorm(1,0,1)
+          foo_cust[i] = 1
+          foo_ord[i] = i_du + floor((j_du - i_du + 1) * runif(1,0,1))
+          foo_inv[i] = Cur_inv_level - foo_ord[i]
+          if (foo_inv[i]<0) {
+            foo_backlog[i] = abs(foo_inv[i])
+          }
+        }
+        foo_backlog_mean =mean(foo_backlog)
+        foo_inv_mean = mean(foo_inv)
+        foo_cust[foo_cust>1] = 0 
+        foo_ord_mean = mean(foo_cust*foo_ord)
+        if (calc_Inv_cost(foo_inv_mean) + mean(cnew) + p*foo_backlog_mean > c + calc_Inv_cost(Cur_inv_level)) {
+         
+        ###########################
+          order_num = order_num + 1
+          order_status = 1
+          order_time = t+order_wait
+          restock = min(big_S - Cur_inv_level,100)
+          order_cost[order_num] = calc_order_cost(restock)
+        }
       }
       
       #Update Inventory level and cost vectors
@@ -119,10 +148,13 @@ for (little_s in min_little_s:max_little_s) {
       }
       else
         Penalty_cost[t+1] = 0
-    }
+      c = alpha*(mu - c) + rnorm(1,0,1)
       
+      inner_loop_runs = inner_loop_runs + 1
+    }
+    
     #Iventory level over time
-
+    
     for (i in 1:length(Inv_level)){
       if(Inv_level[i] >= 0) {
         backlog_level[i] = 0
@@ -134,16 +166,18 @@ for (little_s in min_little_s:max_little_s) {
     
     #Calculate average cost per 200 time units
     avg_cost[run] = mean(order_cost) + h*(1/max_time)*sum(Inv_level[Inv_level>0]) + p*(1/max_time)*sum(backlog_level)
-  }
-
+  
+    
+    }
+  
   #Calcumate the mean of the runs for each level of little_s
   all_means[loop_runs+1] = mean(avg_cost)
   
   #Calculate the variance of the runs for each level of little_s
   all_var[loop_runs+1] = var(avg_cost)
-    
+  
   loop_runs = loop_runs + 1
-}
+#}
 
 #Combine all values of s, average costs, and variances in a single data frame
 df = data.frame(min_little_s:max_little_s, all_means, all_var)
