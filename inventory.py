@@ -4,7 +4,8 @@ import matplotlib.pyplot as plt
 
 
 class Inventory:
-    def __init__(self, capacity, policy, alpha = 0.5, threshold = 50, order_max = 100, order_min = 0, init_stock=0, pre_gen_cus_order=None, pre_gen_unit_cost=None):
+    def __init__(self, capacity, policy, alpha=0.5, threshold=50, init_stock=0, order_max=100, order_min=0, order_cost_avg=100, order_fix=30, hold_cost=.3, back_cost=20,
+                    pre_gen_cus_order=None, pre_gen_unit_cost=None):
 
         self.capacity = capacity
         self.threshold = threshold
@@ -16,8 +17,8 @@ class Inventory:
         self.customer_order_mean = 20
         self.customer_order_std = 2
         ## unit cost of order
-        self.order_u_cost = 100
-        self.order_u_cost_avg = 100
+        self.order_u_cost_avg = order_cost_avg
+        self.order_u_cost = self.order_u_cost_avg
         self.order_u_cost_aplha = alpha
         self.order_u_cost_noise_mean = 20
         self.order_u_cost_noise_std = 2
@@ -33,12 +34,12 @@ class Inventory:
         # order parameters
         self.order_max = order_max
         self.order_min = order_min
-        self.order_fixed_fee = 30 # fixed cost per order
+        self.order_fixed_fee = order_fix # fixed cost per order
         self.actual_order_cost = 0
 
         # other cost constant
-        self.hold_u_cost = 0.3
-        self.backlog_u_cost = 20
+        self.hold_u_cost = hold_cost
+        self.backlog_u_cost = back_cost
 
         # log
         self.stock_log = []
@@ -76,7 +77,7 @@ class Inventory:
         self.cost = self.actual_order_cost + self.hold_u_cost + self.backlog_cost
         # update unit cost for next round
         if self.pre_unit_cost is None:
-            self.order_u_cost = max(0, self.order_u_cost_aplha * (self.order_u_cost_avg - self.order_u_cost) + np.random.normal(self.order_u_cost_noise_mean, self.order_u_cost_noise_std))
+            self.order_u_cost = self.order_u_cost + self.order_u_cost_aplha * (self.order_u_cost_avg - self.order_u_cost) + np.random.normal(self.order_u_cost_noise_mean, self.order_u_cost_noise_std)
         else:
             self.order_u_cost = self.pre_unit_cost[0]
             self.pre_unit_cost = self.pre_unit_cost[1:]
@@ -90,41 +91,50 @@ class Inventory:
             self.customer_order = self.pre_cus_order[0]
             self.pre_cus_order = self.pre_cus_order[1:]
 
-    def order_trigger(self, stock, mean_unit_cost, backlog):
-        return stock * self.hold_u_cost + mean_unit_cost + self.backlog_u_cost * backlog
+    def potential_cost(self, stock, next_cus_order, unit_cost, backlog):
+        ''' return if refill at t+1 cost > refill t cost
+            if not refill:
+            hold_cost * stock(t) + unit_cost(t+1) * (capacity - stock(t) + customer_order(t+1)) + backlog(t+1) * backlog_u_cost
+
+            if refill now:
+            hold_cost * capacity + unit_cost(t) * (capacity - stock(t))
+            '''
+        return self.hold_u_cost * stock + unit_cost * (self.capacity - self.cur_stock + next_cus_order) * unit_cost + self.backlog_u_cost * backlog
 
     def direct_refill(self):
-        self.order = min(self.order_max - self.cur_stock, 100)
+        #self.order = min(self.order_max - self.cur_stock, 100)
+        self.order = self.capacity - self.cur_stock
 
     def improved_refill(self):
         foo_unit_cost = np.zeros(100)
         foo_cus_order = np.zeros(100)
-        foo_stock = np.zeros(100)
         foo_backlog = np.zeros(100)
         for i in range(100):
-            foo_unit_cost[i] = max(0, self.order_u_cost_avg + np.random.normal(self.order_u_cost_noise_mean, self.order_u_cost_noise_std))
+            foo_unit_cost[i] = self.order_u_cost + self.order_u_cost_aplha * (self.order_u_cost_avg - self.order_u_cost) + np.random.normal(self.order_u_cost_noise_mean, self.order_u_cost_noise_std)
             foo_cus_order[i] = max(0, np.floor(np.random.normal(self.customer_order_mean, self.customer_order_std)))
-            foo_stock[i] = self.cur_stock - foo_cus_order[i]
-            foo_backlog[i] = abs(foo_stock[i]) if foo_stock[i] < 0 else 0
+            foo_backlog[i] = foo_cus_order[i] - self.cur_stock if foo_cus_order[i] > self.cur_stock else 0
 
         foo_unit_cost_mean = np.mean(foo_unit_cost)
-        foo_stock_mean = np.mean(foo_stock)
         foo_cus_order_mean = np.mean(foo_cus_order)
         foo_backlog_mean = np.mean(foo_backlog)
-        if self.order_trigger(foo_stock_mean, foo_unit_cost_mean, foo_backlog_mean) > self.order_trigger(self.cur_stock, self.order_u_cost, 0):
-            self.order = min(self.order_max - self.cur_stock, 100)
+        # if refill next round > refill not
+        if self.potential_cost(self.cur_stock, foo_cus_order_mean, foo_unit_cost_mean, foo_backlog_mean) > \
+            self.potential_cost(self.capacity, np.mean(self.customer_order_log + [self.customer_order]), self.order_u_cost, 0):
+            #self.potential_cost(self.capacity, foo_cus_order_mean, self.order_u_cost, 0):
+            self.order = self.capacity - self.cur_stock
         else:
+            #print("wait for next round")
             self.order = 0
 
     def generate_order(self):
         'generate order for restock inventory'
-        if self.cur_stock < self.threshold:
-            if self.order_policy == "direct":
+        if self.order_policy == "improved":
+            self.improved_refill()
+        elif self.order_policy == "direct":
+            if self.cur_stock < self.threshold:
                 self.direct_refill()
-
-            elif self.order_policy == "improved":
-                self.improved_refill()
-
+            else:
+                self.order = 0
         else:
             self.order = 0
 
@@ -136,20 +146,36 @@ if __name__ == "__main__":
     avg_stock_improved = []
     avg_order_direct = []
     avg_order_improved = []
+    #threshold = 100
+
+    paras = {
+        'init_stock' : 100,
+        'alpha' : 0.5,
+        'order_fix' : 30,
+        'order_cost_avg' : 100,
+        'hold_cost' : 0.3,
+        'back_cost' : 20
+        }
+
     for threshold in range(10, 91):
-        inv = Inventory(100, policy="direct", threshold=threshold, alpha=0.5, init_stock=100)
-        for i in range(200):
-            inv.run()
-        avg_cost_direct.append(np.mean(inv.cost_log))
+        direc_avg_cost = []
+        improved_avg_cost = []
+        for avg in range(10):
+            inv = Inventory(capacity=100, policy="direct", threshold=threshold, **paras)
+            for i in range(200):
+                inv.run()
+            direc_avg_cost.append(np.mean(inv.cost_log))
+
+            inv2 = Inventory(capacity=100, policy="improved", threshold=threshold, pre_gen_cus_order=inv.customer_order_log, pre_gen_unit_cost=inv.unit_cost_log, **paras)
+            #inv2 = Inventory(100, policy="improved", threshold=threshold, alpha=0.5, init_stock=100)
+            for i in range(200):
+                inv2.run()
+            improved_avg_cost.append(np.mean(inv2.cost_log))
+
+        avg_cost_direct.append(np.mean(direc_avg_cost))
         #avg_stock_direct.append(np.mean(inv.stock_log))
         #avg_order_direct.append(np.mean(inv.order_log))
-
-        #inv2 = Inventory(100, policy="improved", threshold=threshold, alpha=0.5, init_stock=100, \
-        #                pre_gen_cus_order=inv.customer_order_log, pre_gen_unit_cost=inv.unit_cost_log)
-        inv2 = Inventory(100, policy="improved", threshold=threshold, alpha=0.5, init_stock=100)
-        for i in range(200):
-            inv2.run()
-        avg_cost_improved.append(np.mean(inv2.cost_log))
+        avg_cost_improved.append(np.mean(improved_avg_cost))
         #avg_stock_improved.append(np.mean(inv2.stock_log))
         #avg_order_improved.append(np.mean(inv2.order_log))
 
